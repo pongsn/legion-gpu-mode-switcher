@@ -22,6 +22,21 @@ GREY     = QColor('#9E9E9E')
 BADGE    = QColor('#FFA726')
 
 
+def get_active_gpu():
+    """Returns 'dgpu' if any user process has /dev/nvidia0 open, else 'igpu'.
+    runtime_status is unreliable here because nvidia-drm.modeset=1 keeps the
+    PCI device active regardless of user-space usage."""
+    try:
+        r = subprocess.run(
+            ['fuser', '/dev/nvidia0'],
+            capture_output=True, timeout=3,
+        )
+        return 'dgpu' if r.returncode == 0 else 'igpu'
+    except Exception:
+        pass
+    return 'igpu'
+
+
 def get_mode():
     try:
         r = subprocess.run(
@@ -73,7 +88,7 @@ def _draw_chip(painter, color, clip=None):
         painter.restore()
 
 
-def make_icon(mode, pending=False):
+def make_icon(mode, pending=False, active_gpu='igpu'):
     size = 22
     px = QPixmap(size, size)
     px.fill(Qt.GlobalColor.transparent)
@@ -81,6 +96,11 @@ def make_icon(mode, pending=False):
     p.setRenderHint(QPainter.RenderHint.Antialiasing)
 
     if mode == 'hybrid':
+        fill = QColor(NV_GREEN if active_gpu == 'dgpu' else AMD_RED)
+        fill.setAlpha(90)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(fill)
+        p.drawRoundedRect(5, 5, 12, 12, 2, 2)
         _draw_chip(p, AMD_RED,  QRect(0, 0, 11, size))
         _draw_chip(p, NV_GREEN, QRect(11, 0, 11, size))
     elif mode == 'dgpu':
@@ -104,7 +124,8 @@ class GpuModeTray:
 
         self.active_mode = get_mode()
         self.pending_mode = None
-        self.tray = QSystemTrayIcon(make_icon(self.active_mode))
+        self.active_gpu = get_active_gpu() if self.active_mode == 'hybrid' else None
+        self.tray = QSystemTrayIcon(make_icon(self.active_mode, active_gpu=self.active_gpu))
         self._build_menu()
         self.tray.setContextMenu(self.menu)
         self.tray.show()
@@ -112,6 +133,10 @@ class GpuModeTray:
         self.timer = QTimer()
         self.timer.timeout.connect(self._refresh)
         self.timer.start(30_000)
+
+        self.gpu_timer = QTimer()
+        self.gpu_timer.timeout.connect(self._refresh_active_gpu)
+        self.gpu_timer.start(5_000)
 
     def _build_menu(self):
         self.menu = QMenu()
@@ -128,6 +153,11 @@ class GpuModeTray:
         self.dgpu_action = QAction()
         self.dgpu_action.triggered.connect(lambda: self._request_switch('dgpu'))
         self.menu.addAction(self.dgpu_action)
+
+        self.sep_dgpu_procs = self.menu.addSeparator()
+        self.dgpu_procs_action = QAction('Show dGPU processes')
+        self.dgpu_procs_action.triggered.connect(self._show_dgpu_processes)
+        self.menu.addAction(self.dgpu_procs_action)
 
         self.sep_pending = self.menu.addSeparator()
         self.cancel_action = QAction()
@@ -157,7 +187,7 @@ class GpuModeTray:
             self.status_item.setText(f'GPU mode: {active_label}')
             self.tray.setToolTip(f'GPU mode: {active_label}')
 
-        self.tray.setIcon(make_icon(self.active_mode, pending=pending))
+        self.tray.setIcon(make_icon(self.active_mode, pending=pending, active_gpu=self.active_gpu))
 
         # Switch action labels and enabled state
         for key, action in [('hybrid', self.hybrid_action), ('dgpu', self.dgpu_action)]:
@@ -171,16 +201,42 @@ class GpuModeTray:
                 action.setText(SWITCH_LABELS[key])
                 action.setEnabled(self.active_mode != key)
 
+        in_hybrid = self.active_mode == 'hybrid'
+        self.sep_dgpu_procs.setVisible(in_hybrid)
+        self.dgpu_procs_action.setVisible(in_hybrid)
+
         self.sep_pending.setVisible(pending)
         self.cancel_action.setVisible(pending)
         self.reboot_action.setVisible(pending)
         if pending:
             self.cancel_action.setText(f'Cancel switch to {MODE_LABELS[self.pending_mode]}')
 
+    def _show_dgpu_processes(self):
+        try:
+            r = subprocess.run(
+                ['nvidia-smi', '--query-compute-apps=pid,name,used_memory', '--format=csv,noheader'],
+                capture_output=True, text=True, timeout=5,
+            )
+            text = r.stdout.strip()
+            if not text:
+                text = 'No processes currently using the dGPU.'
+        except Exception as e:
+            text = f'Failed to query nvidia-smi:\n{e}'
+        QMessageBox.information(None, 'dGPU processes', text)
+
+    def _refresh_active_gpu(self):
+        if self.active_mode != 'hybrid':
+            return
+        gpu = get_active_gpu()
+        if gpu != self.active_gpu:
+            self.active_gpu = gpu
+            self._sync_ui()
+
     def _refresh(self):
         mode = get_mode()
         if mode != self.active_mode:
             self.active_mode = mode
+            self.active_gpu = get_active_gpu() if mode == 'hybrid' else None
             self.pending_mode = None
             self._sync_ui()
 

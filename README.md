@@ -4,11 +4,13 @@ A lightweight KDE system tray application for switching GPU modes on Lenovo Legi
 
 ## Features
 
-- Shows current GPU mode in the system tray (chip icon: red/green split for Hybrid, solid green for NVIDIA only)
+- Shows current GPU mode in the system tray (chip icon: red/green split outline for Hybrid, solid green for NVIDIA only)
+- **In Hybrid mode**, the chip body fills red (iGPU active) or green (dGPU active) to show which GPU is currently doing work — updates every 5 seconds via `/dev/nvidia0` usage detection
 - Switch between **Hybrid** (AMD iGPU drives internal display, NVIDIA exposes HDMI) and **NVIDIA only** (dGPU drives everything) with one click
 - No password prompt for the active desktop session (polkit `allow_active: yes`)
 - Tracks pending mode switches before reboot — shows an orange badge on the icon and allows cancelling the switch
 - Triggers a reboot prompt after switching; also offers "Reboot now" from the tray menu
+- **In Hybrid mode**, shows a "Show dGPU processes" menu item listing which processes are currently using the dGPU (via `nvidia-smi`)
 - Installs itself as a KDE autostart entry
 
 ## Compatibility
