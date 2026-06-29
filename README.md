@@ -1,4 +1,4 @@
-# gpu-mode-tray
+# Legion GPU Mode Switcher
 
 A lightweight KDE system tray application for switching GPU modes on Lenovo Legion laptops running the [lenovolegionlinux](https://github.com/johnfanv2/LenovoLegionLinux) driver.
 
@@ -44,20 +44,20 @@ Not Arch or KDE specific — works on any systemd-based distro (Ubuntu, Fedora, 
 ## Installation
 
 ```bash
-git clone https://github.com/pongsn/gpu-mode-tray.git
-cd gpu-mode-tray
+git clone https://github.com/pongsn/legion-gpu-mode-switcher.git
+cd legion-gpu-mode-switcher
 sudo bash install.sh
 ```
 
 `install.sh` will:
 1. Install the polkit policy to `/usr/share/polkit-1/actions/` (enables passwordless switching for the active session)
-2. Install the app to `/usr/local/bin/gpu-mode-tray`
+2. Install the app to `/usr/local/bin/legion-gpu-mode-switcher`
 3. Install the autostart entry to `~/.config/autostart/` (starts on next login)
 
 ## Usage
 
 ```bash
-gpu-mode-tray &
+legion-gpu-mode-switcher &
 ```
 
 Right-click the tray icon to switch GPU mode. A reboot is required for any mode change to take effect — this is a hardware MUX limitation, same as on Windows.

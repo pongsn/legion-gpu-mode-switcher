@@ -1,7 +1,7 @@
 [Desktop Entry]
 Type=Application
-Name=GPU Mode Tray
+Name=Legion GPU Mode Switcher
 Comment=GPU mode switcher for Lenovo Legion
-Exec=/usr/local/bin/gpu-mode-tray
+Exec=/usr/local/bin/legion-gpu-mode-switcher
 Icon=preferences-desktop-display
 X-KDE-autostart-after=panel
