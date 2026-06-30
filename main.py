@@ -1,25 +1,52 @@
 #!/usr/bin/env python3
 import sys
+import os
 import subprocess
 from PyQt6.QtWidgets import QApplication, QSystemTrayIcon, QMenu, QMessageBox
 from PyQt6.QtGui import QIcon, QPixmap, QPainter, QColor, QAction, QPen
 from PyQt6.QtCore import Qt, QTimer, QRect
 
 MODE_LABELS = {
-    'hybrid':  'Hybrid (AMD + NVIDIA)',
-    'dgpu':    'NVIDIA only',
+    'hybrid':  'Hybrid (iGPU + dGPU)',
+    'dgpu':    'dGPU only',
     'unknown': 'Unknown',
 }
 
 SWITCH_LABELS = {
-    'hybrid': 'Switch to Hybrid (AMD + NVIDIA)',
-    'dgpu':   'Switch to NVIDIA only',
+    'hybrid': 'Switch to Hybrid (iGPU + dGPU)',
+    'dgpu':   'Switch to dGPU only',
 }
 
 AMD_RED  = QColor('#EF5350')
 NV_GREEN = QColor('#66BB6A')
 GREY     = QColor('#9E9E9E')
 BADGE    = QColor('#FFA726')
+
+
+_NVIDIA_DEVS = {'/dev/nvidia0', '/dev/nvidiactl', '/dev/nvidia-modeset', '/dev/nvidia-uvm'}
+
+def get_dgpu_processes():
+    """Return sorted list of (pid, name) for every process with an NVIDIA device open."""
+    found = {}
+    try:
+        for entry in os.scandir('/proc'):
+            if not entry.name.isdigit():
+                continue
+            pid = entry.name
+            try:
+                for fd_entry in os.scandir(f'/proc/{pid}/fd'):
+                    try:
+                        if os.readlink(fd_entry.path) in _NVIDIA_DEVS:
+                            with open(f'/proc/{pid}/comm') as f:
+                                found[pid] = f.read().strip()
+                            break
+                    except OSError:
+                        pass
+            except (PermissionError, FileNotFoundError):
+                pass
+    except Exception:
+        pass
+    return sorted(found.items(), key=lambda x: int(x[0]))
 
 
 def get_active_gpu():
@@ -62,32 +89,6 @@ def switch_mode(target):
     return r.returncode == 0
 
 
-def _draw_chip(painter, color, clip=None):
-    if clip:
-        painter.save()
-        painter.setClipRect(clip)
-    pen = QPen(color, 1.5, Qt.PenStyle.SolidLine,
-               Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin)
-    painter.setPen(pen)
-    painter.setBrush(Qt.BrushStyle.NoBrush)
-    # Body
-    painter.drawRoundedRect(5, 5, 12, 12, 2, 2)
-    # Left pins
-    painter.drawRect(2, 8, 3, 2)
-    painter.drawRect(2, 12, 3, 2)
-    # Right pins
-    painter.drawRect(17, 8, 3, 2)
-    painter.drawRect(17, 12, 3, 2)
-    # Top pins
-    painter.drawRect(8, 2, 2, 3)
-    painter.drawRect(12, 2, 2, 3)
-    # Bottom pins
-    painter.drawRect(8, 17, 2, 3)
-    painter.drawRect(12, 17, 2, 3)
-    if clip:
-        painter.restore()
-
-
 def make_icon(mode, pending=False, active_gpu='igpu'):
     size = 22
     px = QPixmap(size, size)
@@ -96,17 +97,65 @@ def make_icon(mode, pending=False, active_gpu='igpu'):
     p.setRenderHint(QPainter.RenderHint.Antialiasing)
 
     if mode == 'hybrid':
-        fill = QColor(NV_GREEN if active_gpu == 'dgpu' else AMD_RED)
-        fill.setAlpha(90)
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(fill)
-        p.drawRoundedRect(5, 5, 12, 12, 2, 2)
-        _draw_chip(p, AMD_RED,  QRect(0, 0, 11, size))
-        _draw_chip(p, NV_GREEN, QRect(11, 0, 11, size))
+        c_left, c_right = AMD_RED, NV_GREEN
     elif mode == 'dgpu':
-        _draw_chip(p, NV_GREEN)
+        c_left = c_right = NV_GREEN
     else:
-        _draw_chip(p, GREY)
+        c_left = c_right = GREY
+
+    def with_alpha(color, alpha):
+        c = QColor(color); c.setAlpha(alpha); return c
+
+    # ── Card body (landscape PCIe card) ────────────────────────
+    card = QRect(1, 4, 20, 12)
+    p.setPen(Qt.PenStyle.NoPen)
+    p.setBrush(with_alpha(c_left, 200))
+    p.save(); p.setClipRect(QRect(0, 0, 11, size))
+    p.drawRoundedRect(card, 2, 2)
+    p.restore()
+    p.setBrush(with_alpha(c_right, 200))
+    p.save(); p.setClipRect(QRect(11, 0, 11, size))
+    p.drawRoundedRect(card, 2, 2)
+    p.restore()
+
+    # ── Two cooling fans ────────────────────────────────────────
+    fan_r, fan_cy = 4, 10
+    # In hybrid mode highlight the hub of whichever GPU is active
+    active_fx = 16 if (mode == 'hybrid' and active_gpu == 'dgpu') else 6
+
+    for fx in [6, 16]:
+        is_active = (fx == active_fx and mode == 'hybrid')
+        # Disc — tinted yellow for active fan, plain white otherwise
+        disc = QColor(255, 220, 80, 140) if is_active else QColor(255, 255, 255, 140)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(disc)
+        p.drawEllipse(fx - fan_r, fan_cy - fan_r, fan_r * 2, fan_r * 2)
+        # Blade cross
+        p.setPen(QPen(QColor(0, 0, 0, 110), 0.8))
+        p.drawLine(fx, fan_cy - fan_r + 1, fx, fan_cy + fan_r - 1)
+        p.drawLine(fx - fan_r + 1, fan_cy, fx + fan_r - 1, fan_cy)
+        # Circle outline — bright yellow ring for active, darker for inactive
+        if is_active:
+            p.setPen(QPen(QColor(255, 230, 100, 230), 1.2))
+        else:
+            p.setPen(QPen(QColor(0, 0, 0, 130), 1.0))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawEllipse(fx - fan_r, fan_cy - fan_r, fan_r * 2, fan_r * 2)
+        # Hub dot
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(255, 255, 255, 200))
+        p.drawEllipse(fx - 1, fan_cy - 1, 2, 2)
+
+    # ── Card outline ────────────────────────────────────────────
+    p.setPen(QPen(QColor(0, 0, 0, 70), 1.0))
+    p.setBrush(Qt.BrushStyle.NoBrush)
+    p.drawRoundedRect(card, 2, 2)
+
+    # ── PCIe gold contact fingers ───────────────────────────────
+    p.setPen(Qt.PenStyle.NoPen)
+    p.setBrush(QColor(200, 160, 50, 230))
+    for tx in [3, 6, 9, 12, 15]:
+        p.drawRect(tx, 16, 2, 3)
 
     if pending:
         p.setPen(Qt.PenStyle.NoPen)
@@ -125,6 +174,7 @@ class GpuModeTray:
         self.active_mode = get_mode()
         self.pending_mode = None
         self.active_gpu = get_active_gpu() if self.active_mode == 'hybrid' else None
+        self.app.setWindowIcon(make_icon(self.active_mode, active_gpu=self.active_gpu))
         self.tray = QSystemTrayIcon(make_icon(self.active_mode, active_gpu=self.active_gpu))
         self._build_menu()
         self.tray.setContextMenu(self.menu)
@@ -187,7 +237,9 @@ class GpuModeTray:
             self.status_item.setText(f'GPU mode: {active_label}')
             self.tray.setToolTip(f'GPU mode: {active_label}')
 
-        self.tray.setIcon(make_icon(self.active_mode, pending=pending, active_gpu=self.active_gpu))
+        icon = make_icon(self.active_mode, pending=pending, active_gpu=self.active_gpu)
+        self.tray.setIcon(icon)
+        self.app.setWindowIcon(icon)
 
         # Switch action labels and enabled state
         for key, action in [('hybrid', self.hybrid_action), ('dgpu', self.dgpu_action)]:
@@ -201,9 +253,9 @@ class GpuModeTray:
                 action.setText(SWITCH_LABELS[key])
                 action.setEnabled(self.active_mode != key)
 
-        in_hybrid = self.active_mode == 'hybrid'
-        self.sep_dgpu_procs.setVisible(in_hybrid)
-        self.dgpu_procs_action.setVisible(in_hybrid)
+        dgpu_active = self.active_gpu == 'dgpu' or self.active_mode == 'dgpu'
+        self.sep_dgpu_procs.setVisible(dgpu_active)
+        self.dgpu_procs_action.setVisible(dgpu_active)
 
         self.sep_pending.setVisible(pending)
         self.cancel_action.setVisible(pending)
@@ -212,16 +264,11 @@ class GpuModeTray:
             self.cancel_action.setText(f'Cancel switch to {MODE_LABELS[self.pending_mode]}')
 
     def _show_dgpu_processes(self):
-        try:
-            r = subprocess.run(
-                ['nvidia-smi', '--query-compute-apps=pid,name,used_memory', '--format=csv,noheader'],
-                capture_output=True, text=True, timeout=5,
-            )
-            text = r.stdout.strip()
-            if not text:
-                text = 'No processes currently using the dGPU.'
-        except Exception as e:
-            text = f'Failed to query nvidia-smi:\n{e}'
+        procs = get_dgpu_processes()
+        if procs:
+            text = '\n'.join(f'{name}  (PID {pid})' for pid, name in procs)
+        else:
+            text = 'No processes currently using the dGPU.'
         QMessageBox.information(None, 'dGPU processes', text)
 
     def _refresh_active_gpu(self):
