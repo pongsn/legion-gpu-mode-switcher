@@ -154,7 +154,7 @@ def make_icon(mode, pending=False, active_gpu='igpu'):
     # ── PCIe gold contact fingers ───────────────────────────────
     p.setPen(Qt.PenStyle.NoPen)
     p.setBrush(QColor(200, 160, 50, 230))
-    for tx in [3, 6, 9, 12, 15]:
+    for tx in [3, 6, 9, 12]:
         p.drawRect(tx, 16, 2, 3)
 
     if pending:
